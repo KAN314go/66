@@ -33,7 +33,7 @@ except ImportError:
 API_URL = "https://s.freetv.sh/api/box/v1/channels"
 
 # ★ 新增: M3U 地址, 用来拉取完整台标
-M3U_URL = "https://www.liaobagua.com/tv/tv.php?a=play"
+M3U_URL = "https://ghfast.top/https://raw.githubusercontent.com/KAN314go/j/refs/heads/master/ciptv_playlist.m3u"
 
 HEADERS = {
     "authorization": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJpcHR2LXNhYXMtYm94Iiwic3ViIjoiNzczNyIsInRlbmFudF9pZCI6NywiZW5kX3VzZXJfaWQiOjc3MzcsImRldmljZV9pZCI6ODQ2NSwiZGV2aWNlX21hYyI6IjQ0OkZFOkVGOjg0OjZBOkQ1IiwidHlwZSI6ImJveCIsImp0aSI6IjAzMTgzOTUwNjA1YjRkMjA4MmM3NTkxMmQ0YjRhY2UwIiwiaWF0IjoxNzg3OTQzNjgxLCJleHAiOjE3OTA1MzU2ODF9.esNteZggNyKGl7mLbSLM0yt49t4MC61e5iHfsoBBrOE",
