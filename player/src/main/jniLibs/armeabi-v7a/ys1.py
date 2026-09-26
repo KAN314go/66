@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
-# freetv.sh 直播源 - TVBox FongMi Spider
+# freetv.sh 直播源 - TVBox FongMi Spider (诊断版)
 # 台标优先从 M3U 拉取, 112114 兜底; 播放保持原逻辑
-# ★ 新增: 磁盘缓存 (解决"时有时无")
 
 import os
 import re
@@ -36,10 +35,10 @@ except ImportError:
 API_URL = "https://s.freetv.sh/api/box/v1/channels"
 M3U_URL = "https://www.liaobagua.com/tv/tv.php?a=play"
 
-# ★ 新增: 缓存配置 (按你的实际目录改)
-CACHE_DIR = "/sdcard/tvbox/py"
+# ★ 缓存路径 (改成 Download 更容易可写)
+CACHE_DIR = "/sdcard/Download"
 CACHE_FILE = os.path.join(CACHE_DIR, "ys_cache.json")
-CACHE_TTL = 3600            # 缓存有效期 1 小时
+CACHE_TTL = 3600
 
 HEADERS = {
     "authorization": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJpcHR2LXNhYXMtYm94Iiwic3ViIjoiNzczNyIsInRlbmFudF9pZCI6NywiZW5kX3VzZXJfaWQiOjc3MzcsImRldmljZV9pZCI6ODQ2NSwiZGV2aWNlX21hYyI6IjQ0OkZFOkVGOjg0OjZBOkQ1IiwidHlwZSI6ImJveCIsImp0aSI6IjAzMTgzOTUwNjA1YjRkMjA4MmM3NTkxMmQ0YjRhY2UwIiwiaWF0IjoxNzg3OTQzNjgxLCJleHAiOjE3OTA1MzU2ODF9.esNteZggNyKGl7mLbSLM0yt49t4MC61e5iHfsoBBrOE",
@@ -243,9 +242,14 @@ ALIAS_MAP = {
 }
 
 
-# ============================================================
-# 工具函数
-# ============================================================
+# ★ 全局状态记录
+_STATUS = {"source": "none", "detail": "", "cache_path": CACHE_FILE}
+
+
+def _log(msg):
+    print("[freetv] %s" % msg, flush=True)
+
+
 def clean_name(name):
     return re.sub(r'\s*\[[^\]]*\]\s*$', '', str(name or '')).strip()
 
@@ -271,19 +275,14 @@ def clean_for_logo(name):
     s = s.replace("ᴴᴰ", "").replace("ᴴ", "").replace("ᴰ", "")
     s = re.sub(r'(?i)[\s\-_\.]*(HD|FHD|UHD|SD|4K|8K|高清|标清|超清|蓝光|直播)[\s\-_\.]*', '', s)
     s = s.translate(TRAD_TO_SIMP)
-
     if s in ALIAS_MAP:
         return ALIAS_MAP[s]
-
     m = re.match(r'(?i)^\s*CCTV[\s\-_]*(\d+)\s*(\+)?', s)
     if m:
         return "CCTV" + m.group(1) + (m.group(2) or "")
-
     s = s.strip(" -_.·").replace(" ", "")
-
     if s in ALIAS_MAP:
         return ALIAS_MAP[s]
-
     return s
 
 
@@ -311,12 +310,8 @@ class Spider(_Base):
             except Exception:
                 pass
 
-    def _log(self, msg):
-        print("[freetv] %s" % msg, flush=True)
-
     def _fetch(self, url, headers, timeout=15):
         h = dict(headers)
-
         if HAS_CFFI:
             try:
                 r = cffi.get(url, headers=h, impersonate="chrome131",
@@ -325,7 +320,6 @@ class Spider(_Base):
                     return r.text
             except Exception:
                 pass
-
         if HAS_REQ:
             try:
                 r = req_lib.get(url, headers=h, verify=False,
@@ -334,7 +328,6 @@ class Spider(_Base):
                     return r.text
             except Exception:
                 pass
-
         try:
             import urllib.request
             import ssl
@@ -355,77 +348,62 @@ class Spider(_Base):
     def _fetch_m3u_logos(self):
         if self._m3u_logo_raw or self._m3u_logo_clean:
             return
-
-        self._log("从 M3U 拉台标: %s" % M3U_URL)
+        _log("从 M3U 拉台标: %s" % M3U_URL)
         try:
             text = self._fetch(M3U_URL, M3U_HEADERS, timeout=12)
             if not text:
-                self._log("M3U 内容为空")
+                _log("M3U 内容为空")
                 return
-
-            self._log("M3U 长度: %d" % len(text))
-
+            _log("M3U 长度: %d" % len(text))
             for line in text.splitlines():
                 line = line.strip()
                 if not line.startswith("#EXTINF"):
                     continue
-
                 logo_m = re.search(r'tvg-logo="([^"]*)"', line)
                 if not logo_m:
                     continue
                 logo_url = logo_m.group(1).strip()
                 if not logo_url:
                     continue
-
                 tvg_name_m = re.search(r'tvg-name="([^"]*)"', line)
                 tvg_name = tvg_name_m.group(1).strip() if tvg_name_m else ""
-
                 name_m = re.search(r',\s*(.+)$', line)
                 display = name_m.group(1).strip() if name_m else ""
-
                 for nm in (tvg_name, display):
                     if nm and nm not in self._m3u_logo_raw:
                         self._m3u_logo_raw[nm] = logo_url
-
                 for nm in (tvg_name, display):
                     if not nm:
                         continue
                     key = clean_for_logo(nm)
                     if key and key not in self._m3u_logo_clean:
                         self._m3u_logo_clean[key] = logo_url
-
-            self._log("M3U 原名字索引 %d 条, 归一化索引 %d 条" % (
-                len(self._m3u_logo_raw), len(self._m3u_logo_clean)
-            ))
+            _log("M3U 原名字索引 %d 条, 归一化索引 %d 条" % (
+                len(self._m3u_logo_raw), len(self._m3u_logo_clean)))
         except Exception as e:
-            self._log("M3U 解析失败: %s" % str(e)[:50])
+            _log("M3U 解析失败: %s" % str(e)[:50])
 
     def _build_logo(self, name, api_logo):
         n = str(name or "").strip()
-
         if n in self._m3u_logo_raw:
             return self._m3u_logo_raw[n]
-
         key = clean_for_logo(n)
         if key and key in self._m3u_logo_clean:
             return self._m3u_logo_clean[key]
-
         if api_logo:
             api_logo = str(api_logo).strip()
             if api_logo.startswith("//"):
                 api_logo = "https:" + api_logo
             if api_logo.startswith("http"):
                 return api_logo
-
         if not LOGO_TEMPLATE or not key:
             return ""
         return LOGO_TEMPLATE.format(name=urllib.parse.quote(key))
 
     # ============================================================
-    # ★ 新增: 缓存读写
+    # 缓存读写 + 状态记录
     # ============================================================
     def _read_cache(self):
-        """返回 (channels, age_seconds)"""
         try:
             if not os.path.exists(CACHE_FILE):
                 return None, 0
@@ -433,38 +411,43 @@ class Spider(_Base):
             with open(CACHE_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
             return data, age
-        except Exception:
+        except Exception as e:
+            _log("读缓存失败: %s" % str(e)[:60])
             return None, 0
 
     def _write_cache(self, channels):
+        global _STATUS
         try:
             os.makedirs(CACHE_DIR, exist_ok=True)
-            # 元组转 list (json 不支持元组)
             serializable = [[cat, lst] for cat, lst in channels]
             with open(CACHE_FILE, "w", encoding="utf-8") as f:
                 json.dump(serializable, f, ensure_ascii=False)
-            self._log("缓存已写入: %s" % CACHE_FILE)
+            _log("缓存已写入: %s" % CACHE_FILE)
             return True
         except Exception as e:
-            self._log("缓存写入失败: %s" % str(e)[:60])
+            _log("缓存写入失败: %s" % str(e)[:80])
+            _STATUS["detail"] = "cache_write_fail:" + str(e)[:40]
             return False
 
     # ============================================================
-    # ★ 修改: _load_channels 加缓存
+    # 加载
     # ============================================================
     def _load_channels(self):
+        global _STATUS
         if self._channels is not None:
             return self._channels
 
-        # ★ 第 1 步: 内存缓存没有 → 看磁盘缓存
+        # 1. 读缓存
         cached, age = self._read_cache()
         if cached and age < CACHE_TTL:
-            self._log("用缓存 (%.0f 秒前)" % age)
+            _log("用缓存 (%.0f 秒前)" % age)
+            _STATUS = {"source": "cache", "detail": "%.0fs" % age,
+                       "cache_path": CACHE_FILE}
             self._channels = cached
-            # 从缓存恢复 M3U 台标索引(可选, 从 channels 里反推)
             return self._channels
 
-        # ★ 第 2 步: 拉新的 (原逻辑, 一字不改)
+        # 2. 拉网络
+        _log("拉取网络...")
         self._fetch_m3u_logos()
 
         grouped = {}
@@ -472,9 +455,6 @@ class Spider(_Base):
         page = 1
         page_size = 100
         total = 0
-        logo_from_m3u = 0
-        logo_from_api = 0
-        logo_from_112114 = 0
         fetch_ok = False
 
         while page <= 50:
@@ -483,12 +463,10 @@ class Spider(_Base):
             body = self._fetch(url, HEADERS)
             if not body:
                 break
-
             try:
                 j = json.loads(body)
             except Exception:
                 break
-
             items = []
             if isinstance(j, dict):
                 d = j.get("data") or {}
@@ -508,9 +486,7 @@ class Spider(_Base):
                            or item.get("play_url") or "").strip()
                 if not name or not purl:
                     continue
-
                 display = clean_name(name)
-
                 api_logo = ""
                 for k in ("logo", "icon", "channel_logo", "cover",
                           "tvg_logo", "tvg-logo", "image", "pic"):
@@ -518,28 +494,11 @@ class Spider(_Base):
                     if v and isinstance(v, str) and len(v) > 5:
                         api_logo = v
                         break
-
-                n = str(name).strip()
-                key = clean_for_logo(n)
-                if (n in self._m3u_logo_raw) or (key and key in self._m3u_logo_clean):
-                    logo_from_m3u += 1
-                elif api_logo:
-                    logo_from_api += 1
-                else:
-                    logo_from_112114 += 1
-
                 logo = self._build_logo(name, api_logo)
-
-                record = {
-                    "name": display,
-                    "url": purl,
-                    "logo": logo,
-                }
-
+                record = {"name": display, "url": purl, "logo": logo}
                 if name in RESTRICTED_NAMES:
                     restricted.append(record)
                     continue
-
                 cat = detect_category(name)
                 grouped.setdefault(cat, []).append(record)
 
@@ -547,13 +506,17 @@ class Spider(_Base):
                 break
             page += 1
 
-        # ★ 第 3 步: 拉取失败 → 回退旧缓存
+        # 3. 失败回退
         if not fetch_ok:
             if cached:
-                self._log("⚠ 拉取失败, 用旧缓存 (%.0f 小时前)" % (age / 3600))
+                _log("⚠ 网络失败, 用旧缓存 (%.0f 小时前)" % (age / 3600))
+                _STATUS = {"source": "stale", "detail": "%.1fh" % (age / 3600),
+                           "cache_path": CACHE_FILE}
                 self._channels = cached
                 return self._channels
-            self._log("⚠ 拉取失败, 无缓存可用")
+            _log("⚠ 网络失败, 无缓存")
+            _STATUS = {"source": "fail", "detail": "no-cache",
+                       "cache_path": CACHE_FILE}
             self._channels = []
             return self._channels
 
@@ -569,14 +532,13 @@ class Spider(_Base):
             ordered.append(("限制", restricted))
 
         self._channels = ordered
-        self._log("共 %d 频道, %d 组" % (total, len(ordered)))
-        self._log("台标来源: M3U=%d, API=%d, 112114=%d" % (
-            logo_from_m3u, logo_from_api, logo_from_112114
-        ))
+        _log("共 %d 频道, %d 组" % (total, len(ordered)))
 
-        # ★ 第 4 步: 写入缓存
-        self._write_cache(ordered)
-
+        # 4. 写缓存
+        write_ok = self._write_cache(ordered)
+        _STATUS = {"source": "network",
+                   "detail": "cache_ok" if write_ok else "cache_fail",
+                   "cache_path": CACHE_FILE}
         return ordered
 
     def _build_flat(self):
@@ -595,16 +557,40 @@ class Spider(_Base):
         return flat
 
     # ============================================================
-    # TVBox 接口 (保持不变)
+    # TVBox 接口
     # ============================================================
     def homeContent(self, filter):
+        global _STATUS
+        _STATUS = {"source": "none", "detail": "", "cache_path": CACHE_FILE}
+
         ordered = self._load_channels()
+
+        marker = {
+            "cache": "⚡",
+            "network": "🌐",
+            "stale": "💾",
+            "fail": "❌",
+            "none": "❓",
+        }.get(_STATUS.get("source"), "❓")
+
+        # 缓存是否可写提示
+        note = _STATUS.get("detail", "")
+        if _STATUS.get("source") == "network" and note == "cache_fail":
+            marker = "🌐⚠"
+
         classes = []
         for cat, lst in ordered:
             classes.append({
                 "type_id": cat,
-                "type_name": "%s (%d)" % (cat, len(lst)),
+                "type_name": "%s %s (%d)" % (marker, cat, len(lst)),
             })
+
+        if not classes:
+            classes = [{
+                "type_id": "empty",
+                "type_name": "%s 无频道 [%s]" % (marker, note or "empty"),
+            }]
+
         return {"class": classes, "filters": {}, "list": []}
 
     def homeVideoContent(self):
@@ -613,7 +599,6 @@ class Spider(_Base):
     def categoryContent(self, tid, pg, filter, extend):
         tid = str(tid).strip()
         flat = self._build_flat()
-
         vids = []
         for i, ch in enumerate(flat):
             if ch["cat"] != tid:
@@ -625,26 +610,20 @@ class Spider(_Base):
                 "vod_remarks": "",
                 "style": {"type": "rect", "ratio": 1.33},
             })
-
         return {
-            "list": vids,
-            "page": 1,
-            "pagecount": 1,
-            "limit": len(vids) or 20,
-            "total": len(vids),
+            "list": vids, "page": 1, "pagecount": 1,
+            "limit": len(vids) or 20, "total": len(vids),
         }
 
     def detailContent(self, ids):
         if not ids:
             return {"list": []}
         s = str(ids[0])
-
         if s.startswith("live#"):
             try:
                 idx = int(s.split("#", 1)[1])
             except Exception:
                 return {"list": []}
-
             flat = self._build_flat()
             if 0 <= idx < len(flat):
                 ch = flat[idx]
@@ -660,10 +639,8 @@ class Spider(_Base):
 
     def playerContent(self, flag, id, vipFlags):
         s = str(id or "").strip()
-
         if "$" in s:
             s = s.split("$")[-1]
-
         if s.startswith("live#"):
             try:
                 idx = int(s.split("#", 1)[1])
@@ -676,10 +653,8 @@ class Spider(_Base):
                     "url": flat[idx]["url"],
                     "header": {},
                 }
-
         if s.startswith("http"):
             return {"parse": 0, "jx": 0, "url": s, "header": {}}
-
         return {"parse": 0, "jx": 0, "url": "", "header": {}}
 
     def searchContent(self, key, quick, pg="1"):
